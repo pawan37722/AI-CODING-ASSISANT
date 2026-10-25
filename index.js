@@ -9,31 +9,21 @@ import os from "os";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 
-// ============================================================
-// CONFIG
-// ============================================================
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Layout:
-//   ai-agent/
-//   ├── index.js        (this file: the agent)
-//   ├── package.json
-//   ├── node_modules/
-//   ├── .env            (API key, kept outside the AI's reach)
-//   └── project/        (the ONLY folder the AI can read/edit/add to; git lives here)
 const PROJECT_DIR = path.join(__dirname, "project");
 fs.mkdirSync(PROJECT_DIR, { recursive: true });
 
 dotenv.config({ path: path.join(__dirname, ".env") });
-dotenv.config({ path: path.join(PROJECT_DIR, ".env") }); // also works if you keep .env inside project/
+dotenv.config({ path: path.join(PROJECT_DIR, ".env") }); 
 
-const CWD = PROJECT_DIR; // the ONLY directory the agent may touch
+const CWD = PROJECT_DIR; 
 const PLATFORM = os.platform();
-let MODEL = process.env.MODEL || ""; // optional override in .env, e.g. MODEL=openai/gpt-oss-120b
+let MODEL = process.env.MODEL || ""; 
 
-// Preferred models (best first). Only used if your key can actually access them.
+
 const PREFERRED_MODELS = [
   "openai/gpt-oss-120b",
   "llama-3.3-70b-versatile",
@@ -47,9 +37,9 @@ const NON_CHAT_MODEL = /whisper|tts|guard|embed|orpheus|playai|safeguard|transcr
 const API_KEY = process.env.GROQ_API_KEY || process.env.apikey;
 
 const MAX_ITERATIONS = 15;
-const MAX_CONTEXT_CHARS = 24000; // total file content sent each prompt (free tier has token limits)
-const MAX_FILE_CHARS = 6000; // per-file cap inside the snapshot
-const MAX_TOOL_OUTPUT = 4000; // cap on any tool result sent back to the model
+const MAX_CONTEXT_CHARS = 24000;
+const MAX_FILE_CHARS = 6000;
+const MAX_TOOL_OUTPUT = 4000;
 const COMMAND_TIMEOUT_MS = 120000;
 
 const IGNORED_DIRS = new Set([
@@ -76,10 +66,6 @@ const client = new OpenAI({
   apiKey: API_KEY,
   baseURL: "https://api.groq.com/openai/v1",
 });
-
-// ============================================================
-// GIT HELPERS
-// ============================================================
 
 async function git(args) {
   const { stdout } = await runFile("git", args, {
@@ -135,7 +121,6 @@ async function setupGit() {
     console.log("📁 Initialized a new git repository.");
   }
   ensureGitignore();
-  // baseline snapshot so every later prompt commit is a clean diff
   if (!(await hasCommits()) && (await isDirty())) {
     await gitCommit("0th snapshot 'initial project state'");
     console.log("📸 Saved initial project state as baseline commit.");
@@ -148,7 +133,7 @@ function ordinal(n) {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
-// Returns [{ hash, subject, when, promptNo|null }] oldest -> newest
+
 async function listCommits() {
   if (!(await hasCommits())) return [];
   const out = await git(["log", "--reverse", "--pretty=format:%h\t%s\t%cr"]);
@@ -168,10 +153,6 @@ async function nextPromptNumber() {
   return (nums.length ? Math.max(...nums) : 0) + 1;
 }
 
-// ============================================================
-// PROJECT SNAPSHOT (sent to the AI on EVERY prompt)
-// ============================================================
-
 function collectFiles(dir = CWD, out = []) {
   let entries;
   try {
@@ -181,7 +162,7 @@ function collectFiles(dir = CWD, out = []) {
   }
   for (const entry of entries) {
     const abs = path.join(dir, entry.name);
-    if (abs === __filename) continue; // never show the agent its own source
+    if (abs === __filename) continue;
     if (entry.isDirectory()) {
       if (!IGNORED_DIRS.has(entry.name)) collectFiles(abs, out);
     } else if (entry.isFile()) {
@@ -204,7 +185,7 @@ function buildSnapshot() {
     return `PROJECT DIRECTORY: ${CWD}\nThe project is EMPTY. There are no files yet.`;
   }
 
-  // fill the content budget with the smallest files first, so more files fit
+
   const bySize = [...files].sort((a, b) => a.size - b.size);
   let budget = MAX_CONTEXT_CHARS;
   const contents = new Map();
@@ -232,10 +213,6 @@ function buildSnapshot() {
 
   return `PROJECT DIRECTORY: ${CWD}\n\nFILE STRUCTURE:\n${tree}\n\nFILE CONTENTS:\n${body}`;
 }
-
-// ============================================================
-// SANDBOXED TOOLS
-// ============================================================
 
 function safePath(p) {
   if (typeof p !== "string" || !p.trim()) throw new Error("Path is required.");
@@ -377,9 +354,6 @@ const toolDefs = [
   },
 ].map((fn) => ({ type: "function", function: fn }));
 
-// ============================================================
-// SYSTEM PROMPT
-// ============================================================
 
 const SYSTEM_PROMPT = `
 You are an expert AI coding assistant working in a single project folder.
@@ -406,10 +380,6 @@ RULES:
 9. Keep code clean, responsive (for web), and well organised.
 10. When finished, reply with a short summary of what you did.
 `;
-
-// ============================================================
-// MODEL DISCOVERY (asks Groq which models your key can use)
-// ============================================================
 
 async function resolveModel() {
   let available = [];
@@ -445,9 +415,6 @@ async function resolveModel() {
   MODEL = available[Math.min(Math.max(idx, 1), available.length) - 1];
 }
 
-// ============================================================
-// AGENT (one prompt = one independent run, no chat history)
-// ============================================================
 
 async function callModel(messages) {
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -473,7 +440,6 @@ async function runAgent(userPrompt) {
   await setupGit();
   const n = await nextPromptNumber();
 
-  // Fresh context every time: system config + project snapshot + current prompt only.
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
     {
@@ -518,7 +484,6 @@ async function runAgent(userPrompt) {
 
   if (!finished) console.log("\n⚠️ Maximum agent iterations reached.");
 
-  // Commit only if the project actually changed (questions leave no commit).
   if (await isDirty()) {
     const status = await git(["status", "--short"]);
     const clean = userPrompt.replace(/\s+/g, " ").replace(/'/g, "’").slice(0, 200);
@@ -527,9 +492,6 @@ async function runAgent(userPrompt) {
   }
 }
 
-// ============================================================
-// COMMIT BROWSING / TIME TRAVEL
-// ============================================================
 
 async function showCommits() {
   const commits = await listCommits();
@@ -557,17 +519,12 @@ async function gotoCommit(n) {
   console.log(`\n✅ Now at ${ordinal(n)} prompt commit. Previous state saved on branch "${backup}".`);
 }
 
-// ============================================================
-// MAIN
-// ============================================================
 
 async function main() {
   await resolveModel();
 
   console.log(`
-==========================================
        🚀 AI POWER CODING ASSISTANT
-==========================================
 Model:    ${MODEL}
 Project:  ${CWD}
 (the AI can only edit files inside this folder)
@@ -578,7 +535,6 @@ Commands:
   exit             quit
 
 Anything else is sent to the AI.
-==========================================
 `);
 
   while (true) {
